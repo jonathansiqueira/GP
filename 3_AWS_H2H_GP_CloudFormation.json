@@ -1,0 +1,172 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+
+  "Description": "AWS H2H Cloud Formation Deployment configuration.",
+
+  "Parameters": {
+    "OAuthUrl": {
+      "Description": "The oauth url to retrieve bearer tokens",
+      "Type": "String",
+      "Default": "https://test.amp.monsanto.com/as/token.oauth2"
+    },
+    "ClientSecret": {
+      "Description": "The client secret used to create bearer tokens",
+      "Type": "String",
+      "NoEcho": true
+    },
+    "EntryMeansURL": {
+      "Description": "The url to retrieve entry means",
+      "Type": "String",
+      "Default": "https://api-t.monsanto.com/productanalyticsapi/search/by-loc-no-ped"
+    },
+    "VPCStack": {
+      "Description": "The client secret used to create bearer tokens",
+      "Type": "String",
+      "Default": "Breeding-ElastiCache"
+    },
+    "H2HProcessorStack": {
+      "Description": "The H2H Pair Processor stack so this configuration can access the H2H Pair Processor topic",
+      "Type": "String",
+      "Default": "H2HPairProcessor"
+    },
+    "H2HPairGeneratorStack": {
+      "Description": "The H2H Pair Generator stack so this configuration can access the H2H Pair Calculator topic",
+      "Type": "String",
+      "Default": "H2HPairGenerator"
+    },
+	"FieldStressURL": {
+      "Description": "The H2H Pair Generator for FieldStress calling from Product Analytics API",
+      "Type": "String",
+      "Default": "https://api-t.monsanto.com/productanalyticsapi/fields/stresses"
+    },
+	"UDRByCropURL": {
+      "Description": "The H2H Pair Generator for UDR By Crop, from field data api",
+      "Type": "String",
+      "Default": "https://api-t.monsanto.com/breeding/v1/field-data/ref/region/geography/{crop}"
+    },
+	"H2HReportStatus": {
+      "Description": "Once Engine Finished, an Email will be sent",
+      "Type": "String"
+      "Default": "https://api01-np.agro.services/headtoheadapi/report"
+    },
+	"SlackWebhookUrl": {
+      "Description": "he H2H Pair Generator for Slack Hook",
+      "Type": "String"
+      "Default": "https://hooks.slack.com/services/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"
+    },
+	"SlackAppName": {
+      "Description": "he H2H Pair Generator for Slack App Name",
+      "Type": "String"
+      "Default": "H2H Engine"
+    }
+  },
+  "Resources": {
+    "dl": {
+      "Type": "AWS::SQS::Queue",
+      "Properties": {
+        "DelaySeconds": 0,
+        "MaximumMessageSize": 10000,
+        "MessageRetentionPeriod": 345600,
+        "QueueName": "breed-h2h-gp-proc-dl",
+        "ReceiveMessageWaitTimeSeconds": 0,
+        "VisibilityTimeout": 30
+      }
+    },
+    "H2HGPProcessorLambda": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Code": {
+          "S3Bucket": "headtohead-east-code",
+          "S3Key": "H2HGermPlasmProcessor.zip"
+        },
+        "DeadLetterConfig": {
+          "TargetArn": {
+            "Fn::GetAtt": [ "dl", "Arn" ]
+          }
+        },
+        "Description": "2 - H2H Germ Plasm processor loads, filters, aggregates entry means data for a germ plasm for downstream H2H comparisons",
+        "KmsKeyArn": { "Fn::ImportValue": { "Fn::Sub": "${VPCStack}-KMSKeyArn" } },
+        "Environment": {
+          "Variables": {
+            "ServiceClientID": "BREEDING-IT-HEAD-TO-HEAD-ENGINE-SVC",
+            "OauthUrl": { "Ref": "OAuthUrl" },
+            "ServiceClientSecret": { "Ref": "ClientSecret" },
+            "TokenTimeoutHoursDecimal": "1.9",
+            "enyimMemcached_cfgserver": { "Fn::ImportValue": { "Fn::Sub": "${VPCStack}-CacheClusterAddress" } },
+            "enyimMemcached_port": { "Fn::ImportValue": { "Fn::Sub": "${VPCStack}-CacheClusterPort" } },
+
+            "BandProcessorTopicARN": { "Fn::ImportValue": { "Fn::Sub": "${H2HPairGeneratorStack}-PairGeneratorTopic" } },
+            "EntryMeansURL": { "Ref": "EntryMeansURL" },
+			"FieldStressURL":{ "Ref": "FieldStressURL" },
+			"UDRByCropURL":{ "Ref": "UDRByCropURL" },
+			"HeadToHeadAPIReportStatus":{ "Ref": "H2HReportStatus" },
+			"SlackWebhookUrl":{ "Ref": "SlackWebhookUrl" },
+			"SlackAppName":{ "Ref": "SlackAppName" }
+          }
+        },
+        "FunctionName": "H2HGermPlasmProcessor",
+        "Handler": "H2HGermPlasmProcessor::H2HGermPlasmProcessor.Engine::ProcessEvent",
+        "MemorySize": "512",
+        "Role": { "Fn::ImportValue": { "Fn::Sub": "${VPCStack}-LambdaRole" } },
+        "Runtime": "dotnetcore1.0",
+        "Timeout": "300",
+        "VpcConfig": {
+          "SecurityGroupIds": [ { "Fn::ImportValue": { "Fn::Sub": "${VPCStack}-SecurityGroupID" } } ],
+          "SubnetIds": [
+            { "Fn::ImportValue": { "Fn::Sub": "${VPCStack}-LambdaSubnet1ID" } },
+            { "Fn::ImportValue": { "Fn::Sub": "${VPCStack}-LambdaSubnet2ID" } },
+            { "Fn::ImportValue": { "Fn::Sub": "${VPCStack}-LambdaSubnet3ID" } }
+          ]
+        },
+        "Tags": [
+          {
+            "Key": "App",
+            "Value": "H2H"
+          },
+          {
+            "Key": "Container",
+            "Value": "H2H GP Processor"
+          },
+          {
+            "Key": "Version",
+            "Value": "0.9.1"
+          }
+        ]
+      }
+    },
+    "H2HGermPlasmTopic": {
+      "Type": "AWS::SNS::Topic",
+      "Properties": {
+        "DisplayName": "H2HGPProc",
+        "TopicName": "H2H_GermPlasm",
+        "Subscription": [
+          {
+            "Endpoint": {
+              "Fn::GetAtt": [ "H2HGPProcessorLambda", "Arn" ]
+            },
+            "Protocol": "lambda"
+          }
+        ]
+      },
+      "DependsOn": [ "H2HGPProcessorLambda" ]
+    },
+    "GPProcessorLambdaInvokePermission": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "Principal": "sns.amazonaws.com",
+        "SourceArn": { "Ref": "H2HGermPlasmTopic" },
+        "FunctionName": {
+          "Fn::GetAtt": [ "H2HGPProcessorLambda", "Arn" ]
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "LambdaRole": {
+      "Value": { "Ref": "H2HGermPlasmTopic" },
+      "Description": "H2H Pair Processor initiator Topic",
+      "Export": { "Name": { "Fn::Sub": "${AWS::StackName}-GermPlasmTopic" } }
+    }
+  }
+}
